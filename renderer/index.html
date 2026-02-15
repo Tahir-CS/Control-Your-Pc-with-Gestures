@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpsGhost</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      background: transparent;
+      cursor: none;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #handCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #cursor {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border: 3px solid #00ff00;
+      border-radius: 50%;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.8);
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      transition: all 0.05s ease;
+    }
+
+    #cursor.pinching {
+      background: rgba(0, 255, 0, 0.5);
+      border-color: #ff0000;
+      box-shadow: 0 0 30px rgba(255, 0, 0, 0.8);
+    }
+
+    #statusPanel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.95);
+      border: 2px solid #00ff00;
+      border-radius: 10px;
+      padding: 15px;
+      color: #00ff00;
+      pointer-events: auto;
+      font-size: 14px;
+      min-width: 300px;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+      z-index: 9999;
+    }
+
+    #statusPanel h3 {
+      margin-bottom: 10px;
+      font-size: 18px;
+      text-align: center;
+      color: #00ff00;
+      text-shadow: 0 0 10px rgba(0, 255, 0, 0.8);
+    }
+
+    .status-item {
+      margin: 8px 0;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .status-label {
+      color: #66ff66;
+    }
+
+    .status-value {
+      color: #ffffff;
+      font-weight: bold;
+    }
+
+    #agenticButton {
+      margin-top: 15px;
+      padding: 10px 20px;
+      background: #ff4444;
+      color: white;
+      border: 2px solid #ff0000;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: bold;
+      width: 100%;
+      transition: all 0.3s;
+      font-size: 14px;
+      pointer-events: auto;
+    }
+
+    #agenticButton:hover {
+      background: #ff0000;
+      box-shadow: 0 0 15px rgba(255, 0, 0, 0.8);
+    }
+
+    #agenticButton.active {
+      background: #00ff00;
+      color: #000;
+      animation: pulse 1s infinite;
+    }
+
+    #videoButton {
+      margin-top: 10px;
+      padding: 8px 15px;
+      background: #4444ff;
+      color: white;
+      border: 2px solid #0000ff;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: bold;
+      width: 100%;
+      transition: all 0.3s;
+      font-size: 13px;
+      pointer-events: auto;
+    }
+
+    #videoButton:hover {
+      background: #0000ff;
+      box-shadow: 0 0 15px rgba(0, 0, 255, 0.8);
+    }
+
+    #videoButton.active {
+      background: #00ffff;
+      color: #000;
+      border-color: #00ffff;
+      box-shadow: 0 0 15px rgba(0, 255, 255, 0.8);
+    }
+
+    #videoButton:disabled {
+      background: #666;
+      border-color: #444;
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 15px rgba(0, 255, 0, 0.8); }
+      50% { box-shadow: 0 0 30px rgba(0, 255, 0, 1); }
+    }
+
+    #transcription {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      border: 2px solid #00ff00;
+      border-radius: 10px;
+      padding: 15px 30px;
+      color: #00ff00;
+      pointer-events: none;
+      max-width: 70%;
+      text-align: center;
+      font-size: 16px;
+      display: none;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+    }
+
+    #transcription.visible {
+      display: block;
+    }
+
+    /* Virtual Keyboard */
+    #keyboard {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.95);
+      border: 3px solid #00ff00;
+      border-radius: 15px;
+      padding: 20px;
+      pointer-events: auto;
+      display: none;
+      box-shadow: 0 0 30px rgba(0, 255, 0, 0.5);
+      z-index: 10000;
+    }
+
+    #keyboard.visible {
+      display: block;
+    }
+
+    #keyboard h4 {
+      text-align: center;
+      color: #00ff00;
+      margin-bottom: 15px;
+      font-size: 16px;
+    }
+
+    .keyboard-row {
+      display: flex;
+      justify-content: center;
+      gap: 5px;
+      margin-bottom: 5px;
+    }
+
+    .key {
+      width: 40px;
+      height: 40px;
+      background: #1a1a1a;
+      border: 2px solid #00ff00;
+      border-radius: 5px;
+      color: #00ff00;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.1s;
+      pointer-events: auto;
+    }
+
+    .key:hover {
+      background: #00ff00;
+      color: #000;
+      transform: scale(1.1);
+      box-shadow: 0 0 15px rgba(0, 255, 0, 0.8);
+    }
+
+    .key.wide {
+      width: 80px;
+    }
+
+    .key.extra-wide {
+      width: 200px;
+    }
+
+    .key.gesture-hover {
+      background: #00ffff;
+      color: #000;
+      transform: scale(1.2);
+      box-shadow: 0 0 20px rgba(0, 255, 255, 1);
+    }
+
+    #keyboardToggle {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      padding: 15px 25px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 2px solid #00ff00;
+      border-radius: 10px;
+      color: #00ff00;
+      font-weight: bold;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: all 0.3s;
+      z-index: 9999;
+    }
+
+    #keyboardToggle:hover {
+      background: #00ff00;
+      color: #000;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.8);
+    }
+
+    video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <canvas id="handCanvas"></canvas>
+    <div id="cursor"></div>
+  </div>
+
+  <div id="statusPanel">
+    <h3>👻 OPSGHOST</h3>
+    <div class="status-item">
+      <span class="status-label">Hand Detected:</span>
+      <span class="status-value" id="handStatus">NO</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Gesture:</span>
+      <span class="status-value" id="gestureStatus">NONE</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Gemini:</span>
+      <span class="status-value" id="geminiStatus">DISCONNECTED</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">AI Control:</span>
+      <span class="status-value" id="agenticStatus">OFF</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Video Sharing:</span>
+      <span class="status-value" id="videoStatus">OFF</span>
+    </div>
+    <button id="agenticButton">🤖 ENABLE AI CONTROL</button>
+    <button id="videoButton" disabled>📹 SHARE VIDEO</button>
+    <div style="margin-top: 10px; font-size: 11px; color: #66ff66; text-align: center;">
+      Video = 💰 save costs!
+    </div>
+  </div>
+
+  <div id="transcription"></div>
+
+  <!-- Virtual Keyboard -->
+  <button id="keyboardToggle">⌨️ KEYBOARD (Ctrl+K)</button>
+  
+  <div id="keyboard">
+    <h4>⌨️ VIRTUAL KEYBOARD</h4>
+    <div class="keyboard-row">
+      <div class="key" data-key="1">1</div>
+      <div class="key" data-key="2">2</div>
+      <div class="key" data-key="3">3</div>
+      <div class="key" data-key="4">4</div>
+      <div class="key" data-key="5">5</div>
+      <div class="key" data-key="6">6</div>
+      <div class="key" data-key="7">7</div>
+      <div class="key" data-key="8">8</div>
+      <div class="key" data-key="9">9</div>
+      <div class="key" data-key="0">0</div>
+      <div class="key wide" data-key="BACK">⌫</div>
+    </div>
+    <div class="keyboard-row">
+      <div class="key" data-key="Q">Q</div>
+      <div class="key" data-key="W">W</div>
+      <div class="key" data-key="E">E</div>
+      <div class="key" data-key="R">R</div>
+      <div class="key" data-key="T">T</div>
+      <div class="key" data-key="Y">Y</div>
+      <div class="key" data-key="U">U</div>
+      <div class="key" data-key="I">I</div>
+      <div class="key" data-key="O">O</div>
+      <div class="key" data-key="P">P</div>
+    </div>
+    <div class="keyboard-row">
+      <div class="key" data-key="A">A</div>
+      <div class="key" data-key="S">S</div>
+      <div class="key" data-key="D">D</div>
+      <div class="key" data-key="F">F</div>
+      <div class="key" data-key="G">G</div>
+      <div class="key" data-key="H">H</div>
+      <div class="key" data-key="J">J</div>
+      <div class="key" data-key="K">K</div>
+      <div class="key" data-key="L">L</div>
+    </div>
+    <div class="keyboard-row">
+      <div class="key" data-key="Z">Z</div>
+      <div class="key" data-key="X">X</div>
+      <div class="key" data-key="C">C</div>
+      <div class="key" data-key="V">V</div>
+      <div class="key" data-key="B">B</div>
+      <div class="key" data-key="N">N</div>
+      <div class="key" data-key="M">M</div>
+      <div class="key" data-key=",">,</div>
+      <div class="key" data-key=".">.</div>
+    </div>
+    <div class="keyboard-row">
+      <div class="key extra-wide" data-key="SPACE">␣ SPACE</div>
+      <div class="key wide" data-key="ENTER">↵</div>
+    </div>
+    <div style="margin-top: 10px; text-align: center; color: #00ff00; font-size: 11px;">
+      Hover keys with hand + pinch to type!
+    </div>
+  </div>
+
+  <video id="webcam" autoplay></video>
+  <canvas id="screenCanvas" style="display: none;"></canvas>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
+tahir b5ttyyzkkk

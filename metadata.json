@@ -1,0 +1,8 @@
+{
+  "name": "OpsGhost",
+  "description": "A Minority Report-style DevOps interface using Gemini Live API and MediaPipe gesture control.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
