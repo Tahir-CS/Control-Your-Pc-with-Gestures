@@ -8,6 +8,7 @@
 
 [![Frostbyte Hackathon 2026](https://img.shields.io/badge/Frostbyte-Hackathon%202026-blue)](https://frostbyte-hackathon.devpost.com/)
 [![AI & ML](https://img.shields.io/badge/Category-AI%20%26%20ML-green)](https://frostbyte-hackathon.devpost.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
 
@@ -97,7 +98,7 @@ npm run electron
 ## 🛠️ Tech Stack
 
 - **Hand Tracking**: MediaPipe Hand Landmarker (GPU)
-- **AI**: Google Gemini 2.0 Live API
+- **AI**: Google Gemini 2.5 Flash Live API
 - **Control**: C++ Windows SendInput API
 - **UI**: Electron + React + TypeScript
 - **Backend**: Node.js + Express
@@ -111,12 +112,6 @@ npm run electron
 3. **C++ Performance**: 10-50x faster than scripting
 4. **Auto Recovery**: Never freezes - resets after 2s timeout
 5. **AI Vision**: Multimodal AI sees and controls your screen
-
----
-
-## 📹 Demo
-
-[Video Demo](#) | [Screenshots](#)
 
 ---
 

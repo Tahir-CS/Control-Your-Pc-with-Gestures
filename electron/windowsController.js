@@ -17,24 +17,13 @@ const SMOOTHING_FACTOR = 0.3; // 0.1 = Very smooth/slow, 0.9 = Very fast/jittery
 
 // PowerShell execution wrapper with timeout (Fallback)
 async function execPowerShell(command, timeoutMs = 2000) {
-  console.log(`   [POWERSHELL] Starting execution (timeout: ${timeoutMs}ms)...`);
   try {
     const { stdout, stderr } = await execAsync(
       `powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "${command}"`,
       { timeout: timeoutMs }
     );
-    console.log(`   [POWERSHELL] Execution completed`);
-    if (stderr) {
-      console.warn('   [POWERSHELL] stderr:', stderr);
-    }
-    if (stdout) {
-      console.log('   [POWERSHELL] stdout:', stdout);
-    }
     return { success: true, stdout };
   } catch (error) {
-    console.error('   [POWERSHELL] Execution failed:', error.message);
-    console.error('   [POWERSHELL] Error code:', error.code);
-    console.error('   [POWERSHELL] Signal:', error.signal);
     return { success: false, error: error.message };
   }
 }
@@ -43,12 +32,8 @@ async function execPowerShell(command, timeoutMs = 2000) {
 function startCppController() {
   const exePath = path.join(__dirname, '..', 'controller.exe');
   
-  // Check if controller.exe exists
   if (!fs.existsSync(exePath)) {
-    console.log('⚠️  [CONTROLLER] controller.exe not found. Using PowerShell fallback.');
-    console.log('   To enable high-performance mode:');
-    console.log('   1. Open "Developer PowerShell for VS 2022"');
-    console.log('   2. Run: .\\compile-controller.bat');
+    console.log('controller.exe not found. Using PowerShell fallback.');
     useCppController = false;
     return;
   }
@@ -58,23 +43,20 @@ function startCppController() {
     cppProcess.stdin.setEncoding('utf-8');
     
     cppProcess.on('error', (err) => {
-      console.error('❌ [CONTROLLER] C++ Controller failed to start:', err);
-      console.log('   Falling back to PowerShell mode...');
+      console.error('C++ Controller failed:', err);
       useCppController = false;
       cppProcess = null;
     });
 
     cppProcess.on('exit', (code) => {
-      console.log(`⚠️  [CONTROLLER] C++ process exited with code ${code}`);
       cppProcess = null;
       useCppController = false;
     });
 
     useCppController = true;
-    console.log("🚀 [CONTROLLER] High-Speed C++ Controller Active");
+    console.log('C++ Controller Active');
   } catch (error) {
-    console.error('❌ [CONTROLLER] Failed to start C++ controller:', error);
-    console.log('   Using PowerShell fallback...');
+    console.error('Failed to start C++ controller:', error);
     useCppController = false;
     cppProcess = null;
   }
@@ -87,10 +69,7 @@ function stopCppController() {
       cppProcess.stdin.write('exit\n');
       cppProcess.kill();
       cppProcess = null;
-      console.log('🛑 [CONTROLLER] C++ Controller stopped');
-    } catch (error) {
-      console.error('❌ [CONTROLLER] Error stopping C++ controller:', error);
-    }
+    } catch (error) {}
   }
   useCppController = false;
 }
@@ -129,15 +108,12 @@ class WindowsController {
         // Removed verbose logging for movement
         return { success: true, mode: 'cpp' };
       } catch (error) {
-        console.error('❌ [CONTROLLER] C++ move failed, using fallback:', error);
         // Fall through to PowerShell
       }
     }
     
-    // PowerShell Fallback
     const cmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${Math.round(x)}, ${Math.round(y)})`;
-    const result = await execPowerShell(cmd, 1000);
-    return result;
+    return await execPowerShell(cmd, 1000);
   }
 
   async mouseClick(button = 'left') {
@@ -147,12 +123,10 @@ class WindowsController {
         cppProcess.stdin.write(`click:${button}\n`);
         return { success: true, mode: 'cpp' };
       } catch (error) {
-        console.error('❌ [CONTROLLER] C++ click failed, using fallback:', error);
         // Fall through to PowerShell
       }
     }
     
-    // PowerShell Fallback
     try {
       const clickCode = button === 'left' ? '0x02' : '0x08';
       const upCode = button === 'left' ? '0x04' : '0x10';
@@ -160,13 +134,8 @@ class WindowsController {
       const cmd = `Add-Type -MemberDefinition '[DllImport(\\"user32.dll\\")]public static extern void mouse_event(int dwFlags,int dx,int dy,int cButtons,int dwExtraInfo);' -Name M -Namespace W; [W.M]::mouse_event(${clickCode},0,0,0,0); Start-Sleep -Milliseconds 50; [W.M]::mouse_event(${upCode},0,0,0,0)`;
       
       const result = await execPowerShell(cmd, 1500);
-      
-      if (!result.success) {
-        console.error('❌ [CONTROLLER] Mouse click error');
-      }
       return result;
     } catch (error) {
-      console.error('❌ [CONTROLLER] Mouse click error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -202,20 +171,17 @@ class WindowsController {
   }
 
   async typeKey(key) {
-    // Try C++ controller first
     if (useCppController && cppProcess) {
       try {
         cppProcess.stdin.write(`key:${key}\n`);
         return { success: true };
       } catch (error) {
-        console.error('   [C++] Key write error:', error);
         // Fall back to PowerShell
       }
     }
 
     // PowerShell fallback
     try {
-      // Map keys for SendKeys format
       let sendKey = key;
       if (key === 'SPACE') sendKey = ' ';
       else if (key === 'ENTER') sendKey = '{ENTER}';
@@ -226,7 +192,6 @@ class WindowsController {
       const cmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${sendKey}')`;
       return await execPowerShell(cmd, 1500);
     } catch (error) {
-      console.error('   [POWERSHELL] Key error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -251,7 +216,6 @@ class WindowsController {
   }
 
   async launchApp(appName) {
-    console.log(`🚀 [CONTROLLER] launchApp called: ${appName}`);
     try {
       // Map common app names to actual executables
       const appMap = {
@@ -277,21 +241,14 @@ class WindowsController {
 
       const executable = appMap[appName.toLowerCase()] || appName;
       const cmd = `Start-Process ${executable}`;
-      
-      console.log(`   [CONTROLLER] Launching: ${executable}`);
       const result = await execPowerShell(cmd, 3000);
-      
-      if (result.success) {
-        console.log(`✅ [CONTROLLER] ${appName} launched successfully`);
-      }
       return result;
     } catch (error) {
-      console.error(`❌ [CONTROLLER] Failed to launch ${appName}:`, error);
       return { success: false, error: error.message };
     }
   }
 
-  // FAST: Direct app launch - Much faster than Windows Search!
+  // Direct app launch - faster than Windows Search
   async searchAndLaunch(query) {
     try {
       // Try direct launch first - fastest method!
@@ -337,12 +294,11 @@ class WindowsController {
       return fallbackResult;
       
     } catch (error) {
-      console.error('❌ [CONTROLLER] Launch failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // IMPROVED: Focus window by title with better Alt+Tab integration
+  // Focus window by title
   async focusWindow(titleSubstring) {
     try {
       // Method 1: Direct window focus
@@ -380,18 +336,15 @@ class WindowsController {
       if (result.success && result.stdout && result.stdout.includes('SUCCESS')) {
         return { success: true, message: result.stdout };
       } else {
-        // Fallback: Use Alt+Tab if direct focus fails
-        console.log('Trying Alt+Tab fallback...');
         await this.pressShortcut('alt+tab');
         return { success: true, method: 'alt-tab-fallback' };
       }
     } catch (error) {
-      console.error('❌ [CONTROLLER] Focus window failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // OPTIMIZED: Press keyboard shortcut (like Ctrl+T, Alt+Tab, Win+D)
+  // Press keyboard shortcut
   async pressShortcut(keys) {
     try {
       // Map to SendKeys format
@@ -422,12 +375,11 @@ class WindowsController {
       const result = await execPowerShell(cmd, 1000);
       return result;
     } catch (error) {
-      console.error('❌ [CONTROLLER] Shortcut failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // OPTIMIZED: Get active window title (for context)
+  // Get active window title
   async getActiveWindow() {
     try {
       const cmd = `
@@ -454,15 +406,11 @@ class WindowsController {
       }
       return { success: false };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Get active window failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // ==================== TAB NAVIGATION WITH VERIFICATION ====================
-  // Much more accurate than mouse coordinates - can verify before clicking!
-  
-  // Get information about currently focused UI element (ENHANCED VERSION)
+  // Get info about currently focused UI element
   async getFocusedElement() {
     try {
       const cmd = `
@@ -571,12 +519,11 @@ class WindowsController {
       
       return { success: false, error: 'No focused element found' };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Get focused element failed:', error);
       return { success: false, error: error.message };
     }
   }
   
-  // Navigate forward with Tab key (moves selection through UI elements)
+  // Navigate forward with Tab
   async navigateWithTab(count = 1) {
     try {
       // Press Tab multiple times
@@ -589,12 +536,11 @@ class WindowsController {
       const result = await execPowerShell(cmd, 1500);
       return { success: true, count: count };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Tab navigation failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Navigate backward with Shift+Tab (goes to previous UI element)
+  // Navigate backward with Shift+Tab
   async navigateBackwards(count = 1) {
     try {
       // Press Shift+Tab multiple times
@@ -607,37 +553,31 @@ class WindowsController {
       const result = await execPowerShell(cmd, 1500);
       return { success: true, count: count };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Shift-Tab navigation failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Press Enter to activate the currently focused element
   async pressEnter() {
     try {
       const cmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')`;
       const result = await execPowerShell(cmd, 1000);
       return { success: true };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Press Enter failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Press Space (for checkboxes, radio buttons, toggle buttons)
   async pressSpace() {
     try {
       const cmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(' ')`;
       const result = await execPowerShell(cmd, 1000);
       return { success: true };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Press Space failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // ==================== PIXEL-PERFECT CLICKING ====================
-  // Get exact bounding rectangle of currently focused element
+  // Get bounding rectangle of currently focused element
   async getElementBounds() {
     try {
       const cmd = `
@@ -704,15 +644,13 @@ class WindowsController {
       
       return { success: false, error: 'No bounds found' };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Get element bounds failed:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Click at the exact center of the currently focused element (PIXEL-PERFECT!)
+  // Click at the center of the currently focused element
   async clickElementCenter() {
     try {
-      // Get the exact bounding box of focused element
       const boundsResult = await this.getElementBounds();
       
       if (!boundsResult.success) {
@@ -721,20 +659,17 @@ class WindowsController {
       
       const { centerX, centerY, width, height } = boundsResult;
       
-      // Validate bounds
       if (width === 0 || height === 0) {
         return { success: false, error: 'Element has zero size' };
       }
       
-      console.log(`🎯 [PIXEL-PERFECT] Clicking center of element at (${centerX}, ${centerY})`);
+      console.log(`Clicking element center at (${centerX}, ${centerY})`);
       
-      // Move to exact center and click
       const moveResult = await this.mouseMove(centerX, centerY);
       if (!moveResult.success) {
         return { success: false, error: 'Failed to move mouse' };
       }
       
-      // Small delay to ensure mouse is positioned
       await new Promise(resolve => setTimeout(resolve, 50));
       
       const clickResult = await this.mouseClick('left');
@@ -748,7 +683,179 @@ class WindowsController {
         elementBounds: { width, height }
       };
     } catch (error) {
-      console.error('❌ [CONTROLLER] Click element center failed:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Enumerate all clickable elements on screen via Windows UI Automation
+  async enumerateClickableElements() {
+    try {
+      const cmd = `
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        
+        try {
+          # Get the foreground window
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          
+          # Get foreground window handle
+          Add-Type @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class WinAPI {
+              [DllImport("user32.dll")]
+              public static extern IntPtr GetForegroundWindow();
+            }
+"@
+          $hwnd = [WinAPI]::GetForegroundWindow()
+          
+          # Find the foreground window element
+          $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::NativeWindowHandleProperty,
+            $hwnd.ToInt32()
+          )
+          $fgWindow = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+          
+          if ($fgWindow -eq $null) {
+            # Fallback to focused element's parent
+            $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+            $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+            $fgWindow = $walker.GetParent($focused)
+            if ($fgWindow -eq $null) { $fgWindow = $root }
+          }
+          
+          # Get screen bounds
+          $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
+          $screenH = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height
+          
+          # Define clickable control types
+          $clickableTypes = @(
+            [System.Windows.Automation.ControlType]::Button,
+            [System.Windows.Automation.ControlType]::Hyperlink,
+            [System.Windows.Automation.ControlType]::MenuItem,
+            [System.Windows.Automation.ControlType]::TabItem,
+            [System.Windows.Automation.ControlType]::CheckBox,
+            [System.Windows.Automation.ControlType]::RadioButton,
+            [System.Windows.Automation.ControlType]::ComboBox,
+            [System.Windows.Automation.ControlType]::ListItem,
+            [System.Windows.Automation.ControlType]::TreeItem,
+            [System.Windows.Automation.ControlType]::Edit,
+            [System.Windows.Automation.ControlType]::Image,
+            [System.Windows.Automation.ControlType]::SplitButton
+          )
+          
+          $elements = @()
+          $id = 1
+          
+          foreach ($ctrlType in $clickableTypes) {
+            $typeCond = New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+              $ctrlType
+            )
+            
+            try {
+              $found = $fgWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $typeCond)
+              
+              foreach ($el in $found) {
+                try {
+                  $rect = $el.Current.BoundingRectangle
+                  
+                  # Skip elements that are off-screen, too small, or too large
+                  if ($rect.Width -lt 5 -or $rect.Height -lt 5) { continue }
+                  if ($rect.Width -gt ($screenW * 0.9) -and $rect.Height -gt ($screenH * 0.9)) { continue }
+                  if ($rect.Left -lt -10 -or $rect.Top -lt -10) { continue }
+                  if ($rect.Left -gt $screenW -or $rect.Top -gt $screenH) { continue }
+                  if ([double]::IsInfinity($rect.Width) -or [double]::IsInfinity($rect.Height)) { continue }
+                  
+                  $name = $el.Current.Name
+                  $type = $el.Current.LocalizedControlType
+                  
+                  $centerX = [int]($rect.Left + ($rect.Width / 2))
+                  $centerY = [int]($rect.Top + ($rect.Height / 2))
+                  
+                  $elements += @{
+                    id = $id
+                    name = if ($name) { $name.Substring(0, [Math]::Min($name.Length, 50)) } else { "" }
+                    type = if ($type) { $type } else { "unknown" }
+                    left = [int]$rect.Left
+                    top = [int]$rect.Top
+                    width = [int]$rect.Width
+                    height = [int]$rect.Height
+                    centerX = $centerX
+                    centerY = $centerY
+                  }
+                  
+                  $id++
+                  if ($id -gt 30) { break } # Limit to 30 elements
+                } catch { continue }
+              }
+            } catch { continue }
+            
+            if ($id -gt 30) { break }
+          }
+          
+          $result = @{
+            success = $true
+            count = $elements.Count
+            screenWidth = $screenW
+            screenHeight = $screenH
+            elements = $elements
+          }
+          
+          Write-Output ($result | ConvertTo-Json -Depth 3 -Compress)
+        } catch {
+          $errMsg = $_.Exception.Message
+          Write-Output "{""success"":false,""error"":""$errMsg"",""elements"":[]}"
+        }
+      `;
+      
+      const result = await execPowerShell(cmd, 5000);
+      
+      if (result.success && result.stdout) {
+        try {
+          const data = JSON.parse(result.stdout.trim());
+          return data;
+        } catch (parseError) {
+          console.error('❌ [SoM] Parse error:', parseError);
+          return { success: false, error: 'Failed to parse element data', elements: [] };
+        }
+      }
+      
+      return { success: false, error: 'No elements found', elements: [] };
+    } catch (error) {
+      return { success: false, error: error.message, elements: [] };
+    }
+  }
+
+  // Click a specific element by its ID
+  async clickElementById(elementId, elements) {
+    try {
+      const target = elements.find(el => el.id === elementId);
+      
+      if (!target) {
+        return { success: false, error: `Element #${elementId} not found` };
+      }
+      
+      console.log(`Clicking element #${elementId}: "${target.name}" at (${target.centerX}, ${target.centerY})`);
+      
+      const moveResult = await this.mouseMove(target.centerX, target.centerY);
+      if (!moveResult.success) {
+        return { success: false, error: 'Failed to move mouse' };
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Click
+      const clickResult = await this.mouseClick('left');
+      if (!clickResult.success) {
+        return { success: false, error: 'Failed to click' };
+      }
+      
+      return { 
+        success: true, 
+        clickedElement: target.name || `Element #${elementId}`,
+        clickedAt: { x: target.centerX, y: target.centerY }
+      };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   }

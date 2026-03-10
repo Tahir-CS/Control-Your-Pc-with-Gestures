@@ -1,5 +1,5 @@
 // OpsGhost Renderer Process
-const { ipcRenderer, desktopCapturer } = require('electron');
+const { ipcRenderer } = require('electron');
 const { FilesetResolver, HandLandmarker } = require('@mediapipe/tasks-vision');
 const { GoogleGenAI, Modality } = require('@google/genai');
 
@@ -24,6 +24,9 @@ let stableCursorY = 0;
 let lastClickState = false;
 let clickStateTimestamp = 0; // Track when state changed (for recovery)
 const STATE_TIMEOUT = 2000; // Auto-reset if stuck >2 seconds
+
+// SoM (Set-of-Mark) element cache
+let cachedSoMElements = []; // Stores last enumerated elements with coordinates
 
 // DOM Elements
 const cursorEl = document.getElementById('cursor');
@@ -99,31 +102,21 @@ document.addEventListener('mousemove', (e) => {
 
 // Initialize
 async function initialize() {
-  console.log('👻 OpsGhost initializing...');
-  
-  // Set canvas size to screen size
   handCanvas.width = window.innerWidth;
   handCanvas.height = window.innerHeight;
   
-  // Initialize keyboard elements and event listeners
   initializeKeyboard();
-  
   await initializeHandTracking();
   await initializeScreenCapture();
   
-  // DON'T initialize Gemini yet - only when user enables AI Control
   geminiStatusEl.textContent = 'READY (Click Enable)';
   geminiStatusEl.style.color = '#ffaa00';
   
   startHandTracking();
-  
-  console.log('✅ OpsGhost ready!');
 }
 
 // Initialize MediaPipe Hand Tracking
 async function initializeHandTracking() {
-  console.log('🖐️ Initializing hand tracking...');
-  
   const vision = await FilesetResolver.forVisionTasks(
     'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
   );
@@ -143,13 +136,10 @@ async function initializeHandTracking() {
   });
   webcamVideo.srcObject = stream;
   
-  console.log('✅ Hand tracking initialized');
 }
 
 // Initialize Desktop Screen Capture
 async function initializeScreenCapture() {
-  console.log('🖥️ Initializing screen capture...');
-  
   const sources = await ipcRenderer.invoke('get-desktop-sources');
   const primaryScreen = sources[0];
   
@@ -166,162 +156,83 @@ async function initializeScreenCapture() {
       }
     }
   });
-  
-  console.log('✅ Screen capture initialized');
 }
 
-// Initialize Gemini Live API with REAL bidirectional streaming
+// Initialize Gemini Live API
 async function initializeGemini() {
-  console.log('🧠 Initializing Gemini Live API...');
-  
   const apiKey = await ipcRenderer.invoke('get-api-key');
   
   if (!apiKey || apiKey === 'YOUR_API_KEY_HERE' || apiKey.trim() === '') {
-    console.warn('⚠️  Gemini API key not set in .env or .env.local!');
     geminiStatusEl.textContent = 'NO API KEY';
     geminiStatusEl.style.color = '#ff4444';
     throw new Error('No API key found');
   }
   
-  console.log('✅ API Key loaded:', apiKey.substring(0, 10) + '...');
-  
   try {
     const ai = new GoogleGenAI({ apiKey });
     
-    // REAL Gemini Live API with bidirectional streaming
     geminiSession = await ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
       config: {
-        // MUST set modalities to AUDIO for voice interaction
         responseModalities: [Modality.AUDIO],
         
         systemInstruction: `You are OpsGhost, an AI assistant that can HEAR the user's voice and control their computer.
 
-🎯 CRITICAL RULE: When user says "click on X" or "click the Y button" → ALWAYS use TAB navigation!
-NEVER capture screen to find click coordinates. TAB navigation is 100x more accurate!
+🎯 CRITICAL RULE: When user says "click on X" → Use SET-OF-MARK method!
+1. capture_screen() - Takes screenshot WITH numbered labels on every clickable element
+2. You see the screenshot with RED numbered circles (#1, #2, #3...) on each button/link
+3. Find which number matches what the user wants
+4. click_element(id) - Click that number! PIXEL-PERFECT using OS coordinates!
 
 ═══════════════════════════════════════════════════════════════
 
 🚀 TIER 1 - APP LAUNCHING (Instant!):
 • search_and_launch(query) - Opens apps directly (chrome, calculator, notepad, etc.)
   Example: "open chrome" → search_and_launch("chrome")
-  Example: "open calculator" → search_and_launch("calculator")
 
 • focus_window(title) - Switch to already-open windows
   Example: "switch to chrome" → focus_window("chrome")
-  Example: "go to discord" → focus_window("discord")
 
 ═══════════════════════════════════════════════════════════════
 
-🎯 TIER 2 - TAB NAVIGATION WITH SMART CLICKING:
+🎯 TIER 2 - SET-OF-MARK CLICKING (Pixel-Perfect!) 🏆
 
-**When user says "click on X" - TAB to find, then click:**
+**The #1 method for clicking ANY element accurately!**
 
-### PRIMARY METHOD: Tab + Read + Enter (WORKS EVERYWHERE!) ✅
-**Reliable workflow that works with Chrome, Electron, everything:**
+### How it works:
+1. **capture_screen()** → Takes screenshot + finds ALL clickable elements via Windows UI Automation
+2. **You receive:** The screenshot with RED numbered labels (#1, #2, #3...) AND a text list of element names
+3. **You pick:** Which number matches what the user wants
+4. **click_element(id)** → Clicks the EXACT CENTER of that element using OS-level coordinates!
 
-1. **navigate_with_tab(1)** - Tab to next element
-2. **get_focused_element()** - Try to read element text (may not work in Chrome)
-3. **Check if it matches** what user wants
-4. **If YES → press_enter()** (keyboard focus ALWAYS works!)
+### Example:
+User: "Click on my profile"
+→ capture_screen()
+→ You see screenshot. Response includes:
+    #1: "Search" [edit]
+    #2: "Notifications" [button]  
+    #3: "Messages" [button]
+    #4: "Profile" [button]
+→ click_element(4) → 🎯 Pixel-perfect click on Profile!
 
-**Example Workflows:**
+### Why this is PERFECT:
+- ✅ **Zero guessing** - You SEE the numbers on the screenshot
+- ✅ **Pixel-perfect** - Coordinates come from Windows UI Automation (not AI vision math)
+- ✅ **No scaling errors** - OS-level coordinates, not screenshot coordinates
+- ✅ **Works everywhere** - Buttons, links, menus, checkboxes, inputs
+- ✅ **Professional** - Same technique as Microsoft OmniParser & Claude Computer Use
 
-**"Click on my profile":**
-- navigate_with_tab(1) → get_focused_element() → {displayText: "Search"} → ❌ Not "Profile"
-- navigate_with_tab(1) → get_focused_element() → {displayText: ""} → ❌ Empty (Chrome web content)
-- navigate_with_tab(1) → get_focused_element() → {displayText: "Profile"} → ✅ MATCH!
-- press_enter() → ✅ Clicked! (Keyboard focus is reliable!)
+### Fallback: Keyboard Shortcuts ⚡
+Use shortcuts when they exist (faster than screenshot):
+- New tab: press_shortcut("ctrl+t")
+- Address bar: press_shortcut("ctrl+l")
+- Close tab: press_shortcut("ctrl+w")
+- Back/Forward: press_shortcut("alt+left") / press_shortcut("alt+right")
+- Refresh: key_tap("F5")
 
-**"Click the Subscribe button":**
-- Keep tabbing, checking names when available
-- When get_focused_element() returns empty in Chrome: count tabs or try press_enter()
-- press_enter() when you think you found it → ✅ Works!
-
-**Why Tab + Enter is MOST RELIABLE:**
-- ✅ **Keyboard focus ALWAYS works** - Browser respects Tab navigation
-- ✅ **press_enter() is universal** - Works in Chrome, Firefox, native apps
-- ✅ **No Chrome limitations** - Doesn't rely on UI Automation text
-- ✅ **Fast** - Direct keyboard activation
-
-**Chrome Limitation:**
-- Chrome web content doesn't expose element names through UI Automation properly
-- get_focused_element() might return empty names in Chrome
-- BUT keyboard focus still works! press_enter() will click the right element
-- Solution: Tab until you estimate you reached the target, then press_enter()
-
-**Alternative for Native Apps:**
-- click_element_center() works PERFECT for native Windows apps, Electron apps
-- For Chrome web content: Use press_enter() instead
-- Check result.className: if "Chrome_WidgetWin_1" → use press_enter()
-
-**Smart Strategy:**
-1. Try get_focused_element() - if it returns good text, use it!
-2. If className is "Chrome_WidgetWin_1" or text is empty → Chrome web content
-3. In Chrome: Tab 3-5 times based on visual layout guess, then press_enter()
-4. For native apps: Use click_element_center() for pixel-perfect clicks
-
-### FALLBACK: Keyboard Shortcuts ⚡ (When applicable)
-- Opening new tab? → press_shortcut("ctrl+t")
-- Focus address bar? → press_shortcut("ctrl+l")
-- Close tab? → press_shortcut("ctrl+w")
-- Go back/forward? → press_shortcut("alt+left") or press_shortcut("alt+right")
-- Refresh page? → key_tap("F5")
-- **Use shortcuts ONLY when action matches perfectly** (new tab, address bar, etc.)
-
-### AVOID: Screen Capture for Clicking ❌
-**DO NOT use capture_screen() to guess tab positions - use sequential tabbing!**
-- capture_screen() is for "what do you see?" questions only
-
-═══════════════════════════════════════════════════════════════
-
-📋 COMPLETE WORKFLOW EXAMPLES:
-
-Request: "Click on my profile"
-Decision: No shortcut → Tab and use press_enter()
-→ navigate_with_tab(1) → get_focused_element() → check if name matches
-→ navigate_with_tab(1) → get_focused_element() → keep checking
-→ navigate_with_tab(1) → get_focused_element() → "Profile" or estimate reached
-→ press_enter() → ✅ Clicked!
-
-Request: "Open new tab"
-Decision: Shortcut exists! → Use it instantly
-→ press_shortcut("ctrl+t")
-→ "New tab opened!"
-
-Request: "Click the subscribe button"
-Decision: No shortcut → Tab and press_enter()
-→ navigate_with_tab(1) → get_focused_element() → "Video title" or "" → ❌
-→ navigate_with_tab(1) → get_focused_element() → "Subscribe" or estimate → ✅ Found it!
-→ press_enter() → ✅ Clicked! (Works in Chrome!)
-
-Request: "Go to address bar"
-Decision: Shortcut exists! → Use it
-→ press_shortcut("ctrl+l")
-→ "Address bar focused!"
-
-═══════════════════════════════════════════════════════════════
-
-💡 DECISION FLOWCHART:
-1. Does a keyboard shortcut exist for this action?
-   YES → Use press_shortcut() (instant!)
-   NO ↓
-
-2. Is it a specific button/link the user named?
-   YES → LOOP: navigate_with_tab(1) → get_focused_element() → check text (if available) → if match press_enter(), else repeat
-   NO ↓
-
-3. Tab 3-5 times based on layout estimate, then press_enter()
-
-═══════════════════════════════════════════════════════════════
-
-Functions Available:
-• navigate_with_tab(1) - Tab to next element (ONE at a time!)
-• get_focused_element() - Read element text (works in native apps, limited in Chrome)
-• press_enter() - RELIABLE CLICKING! Works everywhere (Chrome, native apps, all browsers)
-• press_shortcut(keys) - Keyboard shortcuts (fastest!)
-• click_element_center() - Pixel-perfect (only for native Windows apps, NOT Chrome web content)
-• ❌ capture_screen() - Only for "what do you see?" questions, NOT for clicking!
+### Fallback: Tab Navigation
+If capture_screen() finds no elements, use Tab:
+- navigate_with_tab(1) → press_enter()
 
 ═══════════════════════════════════════════════════════════════
 
@@ -334,67 +245,56 @@ Functions Available:
 
 📋 COMPLETE WORKFLOW EXAMPLES:
 
-Request: "Open Chrome and go to YouTube"
-→ search_and_launch("chrome")
-→ [wait 2 sec]
-→ press_shortcut("ctrl+l")
-→ type_string("youtube.com")
-→ press_enter()
+1. User: "Click on my profile"
+   → capture_screen() → [See #4 is "Profile"] → click_element(4) → ✅ PERFECT!
 
-Request: "Click on my profile"
-→ [No shortcut exists]
-→ navigate_with_tab(1) → get_focused_element() → "Search bar" or "" → ❌
-→ navigate_with_tab(1) → get_focused_element() → "" → ❌ (Chrome doesn't expose names)
-→ navigate_with_tab(1) → get_focused_element() → "Profile" or estimate → ✅ Try it!
-→ press_enter() → ✅ Clicked! (Keyboard focus works!)
+2. User: "Open a new tab"
+   → press_shortcut("ctrl+t") → ✅ INSTANT!
 
-Request: "Click the subscribe button"
-→ navigate_with_tab(1) → get_focused_element() → empty in Chrome
-→ navigate_with_tab(1) → get_focused_element() → empty
-→ navigate_with_tab(1) → estimate reached target → press_enter() → ✅ Works!
-→ click_element_center() → 🎯 Exact center click!
-→ "Subscribed!" ✅ PIXEL-PERFECT!
+3. User: "Click the Subscribe button"
+   → capture_screen() → [See #7 is "Subscribe"] → click_element(7) → ✅ PIXEL-PERFECT!
 
-Request: "Open new tab"
-→ [Shortcut exists!]
-→ press_shortcut("ctrl+t")
-→ "New tab!"
+4. User: "Open Chrome and go to YouTube"
+   → search_and_launch("chrome") → press_shortcut("ctrl+l") → type_string("youtube.com") → press_enter()
 
-Request: "What do you see on my screen?"
-→ capture_screen()
-→ [then describe what you see]
+5. User: "Click on login"
+   → capture_screen() → [See #2 is "Login"] → click_element(2) → ✅ EXACT!
+
+6. User: "What do you see?" 
+   → capture_screen() → Describe what you see
 
 ═══════════════════════════════════════════════════════════════
 
-⚡ EXECUTION TIPS:
-• Check for shortcuts FIRST - they're instant (ctrl+t, ctrl+l, ctrl+w)!
-• For clicking in Chrome: TAB to estimate position → press_enter() (most reliable!)
-• get_focused_element() might return empty in Chrome web content (limitation!)
-• If className="Chrome_WidgetWin_1" → Chrome web, use press_enter() not click_element_center()
-• For native Windows apps: get_focused_element() works well, can use click_element_center()
-• Keep tabbing until you find it (usually 3-7 elements)
-• press_enter() is MORE RELIABLE than click_element_center() for web content!
-• Be confident: "Tabbed 3 times, pressing enter to click!"
-• Keyboard focus ALWAYS works - even when UI Automation doesn't!`,
+💡 DECISION FLOWCHART:
+1. Does a keyboard shortcut exist? → YES: Use press_shortcut() (instant!)
+2. Need to click something? → capture_screen() → click_element(id) (pixel-perfect!)
+3. No elements found? → navigate_with_tab(1) → press_enter() (fallback)
+
+⚡ TIPS:
+• capture_screen() returns BOTH the screenshot AND a numbered element list
+• click_element(id) uses the NUMBER, not a name! e.g. click_element(4) not click_element("Profile")
+• If the element you need isn't in the list, try Tab navigation as fallback
+• Always check shortcuts first - they're faster than screenshots!
+• Be fast and confident: "I see Profile is #4, clicking it now!"`,
         
         tools: [
           {
             functionDeclarations: [
               {
                 name: 'mouse_move',
-                description: '❌ INACCURATE - DO NOT USE! Mouse coordinates are terribly inaccurate! Use visual tab counting instead: capture_screen() → count tab positions → navigate_with_tab(N) → press_enter()',
+                description: '⚠️ LOW-LEVEL: Move mouse to absolute pixel coordinates. Prefer click_element() for clicking UI elements! Only use for drag operations or custom coordinates.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    x: { type: 'NUMBER', description: 'X coordinate (INACCURATE!)' },
-                    y: { type: 'NUMBER', description: 'Y coordinate (INACCURATE!)' }
+                    x: { type: 'NUMBER', description: 'X pixel coordinate' },
+                    y: { type: 'NUMBER', description: 'Y pixel coordinate' }
                   },
                   required: ['x', 'y']
                 }
               },
               {
                 name: 'mouse_click',
-                description: '❌ AVOID - Use Tab navigation instead! Mouse clicking is unreliable. For clicking: capture_screen() → count positions → navigate_with_tab(N) → press_enter()',
+                description: '⚠️ LOW-LEVEL: Click at current mouse position. Prefer click_element() which uses exact OS coordinates! Only use after mouse_move for special cases.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
@@ -480,25 +380,36 @@ Request: "What do you see on my screen?"
               },
               {
                 name: 'capture_screen',
-                description: '📸 SCREEN VIEW ONLY: Capture screen for "what do you see?" questions. DO NOT use for clicking! For clicking, use navigate_with_tab(1) + get_focused_element() loop instead.',
+                description: '📸 SMART CAPTURE: Takes screenshot with NUMBERED LABELS on all clickable elements (Set-of-Mark). Returns element list with IDs. ALWAYS call this FIRST before clicking anything! Then use click_element(id) to click any numbered element.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {}
                 }
               },
               {
-                name: 'navigate_with_tab',
-                description: '🎯 PRIMARY CLICKING METHOD: Press Tab to move to next element. Use ONE at a time! Always call get_focused_element() after to read what element you landed on. Loop: tab(1) → get_focused_element() → check text → if match press_enter(), else repeat.',
+                name: 'click_element',
+                description: '🎯 PIXEL-PERFECT CLICK: Click a numbered element from capture_screen(). Uses exact OS-level coordinates from UI Automation - NO guessing! MUST call capture_screen() first to get element numbers. Example: capture_screen() shows #4 is "Settings", then click_element(4).',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    count: { type: 'NUMBER', description: 'Number of Tab presses (use 1 for step-by-step!)' }
+                    id: { type: 'NUMBER', description: 'Element number from the capture_screen() numbered overlay' }
+                  },
+                  required: ['id']
+                }
+              },
+              {
+                name: 'navigate_with_tab',
+                description: '⬆️ FALLBACK: Press Tab to move through elements. Use as backup when click_element() doesn\'t work. Prefer capture_screen() → click_element(id) flow.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {
+                    count: { type: 'NUMBER', description: 'Number of Tab presses' }
                   }
                 }
               },
               {
                 name: 'get_focused_element',
-                description: '❓ READ TEXT (Limited in Chrome): Get text of focused element. Returns {displayText, name, type, className}. NOTE: Chrome web content often returns EMPTY names! Check className - if "Chrome_WidgetWin_1" you\'re in Chrome web. Use for native apps or as hint, but don\'t rely on it for Chrome!',
+                description: '❓ READ: Get text/type of currently focused element. Useful after Tab navigation. Limited in Chrome (may return empty names).',
                 parameters: {
                   type: 'OBJECT',
                   properties: {}
@@ -516,7 +427,7 @@ Request: "What do you see on my screen?"
               },
               {
                 name: 'press_enter',
-                description: '✅ PRIMARY CLICKING METHOD: Press Enter to activate the focused element. MOST RELIABLE - works in Chrome, Firefox, native apps, everywhere! Use after navigate_with_tab(). Keyboard focus ALWAYS works even when UI Automation doesn\'t!',
+                description: '✅ ACTIVATE: Press Enter to activate the focused element. Use after navigate_with_tab() as fallback. Primary method is click_element().',
                 parameters: {
                   type: 'OBJECT',
                   properties: {}
@@ -532,7 +443,7 @@ Request: "What do you see on my screen?"
               },
               {
                 name: 'get_element_bounds',
-                description: '� GET COORDINATES (Native Apps): Get bounding box of focused element. Returns centerX, centerY, width, height. WARNING: Only works for native Windows apps, NOT Chrome web content! Chrome returns whole window bounds.',
+                description: '📐 Get bounding box of currently focused element. Returns centerX, centerY, width, height. Prefer click_element() instead.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {}
@@ -540,7 +451,7 @@ Request: "What do you see on my screen?"
               },
               {
                 name: 'click_element_center',
-                description: '🎯 PIXEL-PERFECT (Native Apps Only): Click exact center using UI Automation bounds. WARNING: Only works for native Windows apps, Electron, NOT Chrome web content! For Chrome, use press_enter() instead. Check className first!',
+                description: '🎯 Click center of currently focused element using UI Automation bounds. Prefer click_element() with SoM IDs instead.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {}
@@ -552,24 +463,20 @@ Request: "What do you see on my screen?"
       },
       callbacks: {
         onopen: () => {
-          console.log('✅ Gemini Live connected!');
           geminiStatusEl.textContent = 'CONNECTED';
           geminiStatusEl.style.color = '#00ff00';
         },
         
         onmessage: (message) => {
-          console.log('📨 Gemini message:', message);
           handleGeminiMessage(message);
         },
         
         onclose: () => {
-          console.log('🔌 Gemini disconnected');
           geminiStatusEl.textContent = 'DISCONNECTED';
           geminiStatusEl.style.color = '#ff4444';
         },
         
         onerror: (error) => {
-          console.error('❌ Gemini error:', error);
           geminiStatusEl.textContent = 'ERROR';
           geminiStatusEl.style.color = '#ff0000';
           showTranscription(`Error: ${error.message}`);
@@ -577,23 +484,10 @@ Request: "What do you see on my screen?"
       }
     });
     
-    console.log('✅ Gemini Live session created!');
-    
   } catch (error) {
-    console.error('❌ Gemini initialization failed:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name
-    });
     geminiStatusEl.textContent = 'ERROR';
     geminiStatusEl.style.color = '#ff0000';
-    
-    // Show specific error message
-    showTranscription(`❌ Gemini Error: ${error.message}`);
-    
-    // Fallback: Basic mode
-    console.log('⚠️  Using basic mode without Live API');
+    showTranscription(`Gemini Error: ${error.message}`);
   }
 }
 
@@ -611,7 +505,6 @@ function startHandTracking() {
 
 // Process Hand Tracking Results
 function processHandResults(results) {
-  // Clear canvas
   ctx.clearRect(0, 0, handCanvas.width, handCanvas.height);
   
   if (results.landmarks && results.landmarks.length > 0) {
@@ -634,7 +527,7 @@ function processHandResults(results) {
       }
     });
     
-    // Use the PRIMARY hand (first detected) for cursor control
+    // Use the PRIMARY hand for cursor control
     const primaryGesture = gestures[0];
     
     // Update gesture status
@@ -736,9 +629,7 @@ function detectGesture(landmarks) {
   // Right Click = Middle + Thumb pinch (index extended, not left clicking)
   const isRightClick = middleThumbDist < 0.06 && isIndexExtended && indexThumbDist > 0.08;
   
-  // CRITICAL FIX: Use index BASE (knuckle) for cursor position, NOT tip!
-  // The base doesn't move during pinch, making cursor super stable!
-  // FIX MIRRORING: Flip X coordinate (1 - x inverts it)
+  // CRITICAL: Use index BASE (knuckle) for cursor position
   return {
     type: isLeftClick ? 'left_click' : isRightClick ? 'right_click' : 'point',
     x: (1 - indexMCP.x) * window.innerWidth,  // Using BASE not tip!
@@ -839,10 +730,8 @@ function handleGesture(gesture, landmarks) {
     }
     
   } else if (!isClicking && clickState === 'WAITING_RELEASE') {
-    // Gesture released - ready for next click
     clickState = 'IDLE';
     clickStateTimestamp = now;
-    console.log('✅ Released - ready for next click');
   } else if (!isClicking && clickState === 'CLICK_DETECTED') {
     // Released before executing - reset immediately
     clickState = 'IDLE';
@@ -854,18 +743,14 @@ function handleGesture(gesture, landmarks) {
 
 // Move Cursor - Actually move the real Windows cursor!
 function moveCursor(x, y) {
-  // Send IPC to main process to move REAL Windows cursor
   ipcRenderer.invoke('execute-action', {
     type: 'mouse_move',
     x: Math.round(x),
     y: Math.round(y),
     fromGesture: true // Flag to indicate this is gesture control - no smoothing!
-  }).catch(err => {
-    // Silent fail - don't spam console with movement errors
-  });
+  }).catch(() => {});
 }
 
-// Execute Click (Simulates real mouse click at gesture position)
 function executeClick(x, y, button = 'left') {
   
   // Visual feedback first
@@ -884,20 +769,14 @@ function executeClick(x, y, button = 'left') {
     button: button,
     fromAI: false
   }).then(result => {
-    // Click executed
     if (!result || !result.success) {
-      console.error(`❌ ========== ${button.toUpperCase()} CLICK FAILED ==========`);
-      console.error('   Error:', result ? result.error : 'No response');
+      console.error(`${button.toUpperCase()} CLICK FAILED:`, result ? result.error : 'No response');
     }
-    
-    // Reset visual
     setTimeout(() => {
       cursorEl.style.transform = 'translate(-50%, -50%) scale(1)';
       cursorEl.style.background = 'transparent';
     }, 150);
   }).catch(err => {
-    console.error(`❌ ========== ${button.toUpperCase()} CLICK ERROR (CATCH) ==========`);
-    console.error('   Exception:', err);
     cursorEl.style.transform = 'translate(-50%, -50%) scale(1)';
     cursorEl.style.background = 'transparent';
   });
@@ -907,8 +786,6 @@ function executeClick(x, y, button = 'left') {
 async function handleMouseMovementStop() {
   if (!isAgenticMode) return;
   
-  console.log('🖱️ Physical mouse detected - Stopping agentic mode');
-  
   await ipcRenderer.invoke('emergency-stop');
   isAgenticMode = false;
   
@@ -917,16 +794,16 @@ async function handleMouseMovementStop() {
   agenticStatusEl.textContent = 'OFF';
   agenticStatusEl.style.color = '#ff4444';
   
-  showTranscription('🖱️ Physical mouse detected - Agentic mode stopped');
+  showTranscription('Physical mouse detected - Agentic mode stopped');
   
   setTimeout(() => {
     hideTranscription();
   }, 3000);
 }
 
-// Agentic mode now only stops on ESC key press (handled in keydown listener)
+// Agentic mode now only stops on ESC key press
 
-// OPTIMIZED: On-demand screen capture (only when AI requests it)
+// On-demand screen capture with SoM numbering
 async function captureAndSendScreen() {
   if (!geminiSession || !isAgenticMode) {
     return { success: false, error: 'AI Control not active' };
@@ -940,12 +817,39 @@ async function captureAndSendScreen() {
     // Wait for video to be ready
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    screenCanvas.width = 1280;
-    screenCanvas.height = 720;
+    // Get actual screen dimensions
+    const screenW = window.screen.width;
+    const screenH = window.screen.height;
+    
+    // Use full resolution for accuracy
+    screenCanvas.width = screenW;
+    screenCanvas.height = screenH;
     screenCtx.drawImage(video, 0, 0, screenCanvas.width, screenCanvas.height);
     
+    // Enumerate all clickable elements via UI Automation
+    let elements = [];
+    try {
+      const enumResult = await ipcRenderer.invoke('execute-action', { type: 'enumerate_elements', fromAI: true });
+      if (enumResult.success && enumResult.elements && enumResult.elements.length > 0) {
+        elements = enumResult.elements;
+        cachedSoMElements = elements;
+      }
+    } catch (enumError) {}
+    
+    // Draw numbered labels on the screenshot
+    if (elements.length > 0) {
+      drawSoMLabels(screenCtx, elements, screenW, screenH);
+    }
+    
+    // Resize to send size
+    const sendCanvas = document.createElement('canvas');
+    sendCanvas.width = 1920;
+    sendCanvas.height = 1080;
+    const sendCtx = sendCanvas.getContext('2d');
+    sendCtx.drawImage(screenCanvas, 0, 0, sendCanvas.width, sendCanvas.height);
+    
     return new Promise((resolve) => {
-      screenCanvas.toBlob(async (blob) => {
+      sendCanvas.toBlob(async (blob) => {
         try {
           const arrayBuffer = await blob.arrayBuffer();
           const base64 = arrayBufferToBase64(arrayBuffer);
@@ -958,22 +862,56 @@ async function captureAndSendScreen() {
             }
           });
           
-          resolve({ success: true });
+          resolve({ success: true, elementCount: elements.length });
         } catch (error) {
-          console.error('Error sending screen frame:', error);
           resolve({ success: false, error: error.message });
         }
-      }, 'image/jpeg', 0.6);
+      }, 'image/jpeg', 0.85);
     });
   } catch (error) {
-    console.error('Error capturing screen:', error);
     return { success: false, error: error.message };
   }
 }
 
-// DUAL MODE: On-demand + Continuous streaming option
-// Screen is captured on-demand via capture_screen() function
-// OR continuously streamed if video sharing is enabled
+// Draw Set-of-Mark labels on canvas
+function drawSoMLabels(ctx, elements, screenW, screenH) {
+  for (const el of elements) {
+    const { id, left, top, width, height, name } = el;
+    
+    // Skip elements with invalid bounds
+    if (width < 5 || height < 5) continue;
+    if (left < 0 || top < 0 || left > screenW || top > screenH) continue;
+    
+    // Draw semi-transparent highlight box around element
+    ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(left, top, width, height);
+    
+    // Draw numbered label (red circle with white number)
+    const labelX = left;
+    const labelY = top;
+    const labelSize = Math.max(16, Math.min(24, height * 0.6));
+    
+    // Red circle background
+    ctx.fillStyle = 'rgba(255, 0, 0, 0.9)';
+    ctx.beginPath();
+    ctx.arc(labelX + labelSize / 2, labelY + labelSize / 2, labelSize / 2 + 2, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // White number text
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `bold ${labelSize}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(id), labelX + labelSize / 2, labelY + labelSize / 2);
+  }
+  
+  // Reset text alignment
+  ctx.textAlign = 'start';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// Dual mode: On-demand + Continuous streaming
 function startScreenStreaming() {
   const video = document.createElement('video');
   video.srcObject = screenStream;
@@ -981,7 +919,7 @@ function startScreenStreaming() {
   
   let lastScreenSent = 0;
   setInterval(() => {
-    // Only stream video if video sharing is ENABLED (cost-conscious option)
+    // Only stream video if sharing is enabled
     if (!geminiSession || !isAgenticMode || !isVideoSharing) return;
     
     // Throttle to 1 FPS
@@ -1005,16 +943,12 @@ function startScreenStreaming() {
             data: base64
           }
         });
-      } catch (error) {
-        console.error('Error sending screen frame:', error);
-      }
+      } catch (error) {}
     }, 'image/jpeg', 0.6);
-  }, 1000); // Check every second, send at 1 FPS
-  
-  console.log('📹 Screen streaming initialized (1 FPS when enabled)');
+  }, 1000);
 }
 
-// Start microphone streaming to Gemini (REAL PCM 16-bit 16kHz)
+// Start microphone streaming to Gemini (PCM 16-bit 16kHz)
 async function startMicrophoneStreaming() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -1029,7 +963,6 @@ async function startMicrophoneStreaming() {
     
     const audioContext = new AudioContext({ sampleRate: 16000 });
     const source = audioContext.createMediaStreamSource(stream);
-    // Reduce buffer size for lower latency: 2048 instead of 4096
     const processor = audioContext.createScriptProcessor(2048, 1, 1);
     
     source.connect(processor);
@@ -1044,15 +977,13 @@ async function startMicrophoneStreaming() {
       // Convert Float32 to PCM Int16
       const pcm16 = new Int16Array(inputData.length);
       for (let i = 0; i < inputData.length; i++) {
-        // Clamp to [-1, 1] and scale to 16-bit range
-        const clamped = Math.min(1, Math.max(-1, inputData[i]));
+        const clamped = Math.max(-1, Math.min(1, inputData[i]));
         pcm16[i] = Math.floor(clamped * 0x7FFF);
       }
       
       // Convert to Base64
       const base64Audio = arrayBufferToBase64(pcm16.buffer);
       
-      // Send to Gemini Live API (with error handling)
       try {
         geminiSession.sendRealtimeInput({
           media: {
@@ -1060,15 +991,11 @@ async function startMicrophoneStreaming() {
             data: base64Audio
           }
         });
-      } catch (error) {
-        console.error('Error sending audio chunk:', error);
-      }
+      } catch (error) {}
     };
     
-    console.log('🎤 Microphone streaming started (PCM 16kHz, buffer: 2048)');
   } catch (error) {
-    console.error('❌ Microphone setup failed:', error);
-    showTranscription('❌ Microphone access denied');
+    showTranscription('Microphone access denied');
   }
 }
 
@@ -1094,7 +1021,7 @@ function base64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
-// Play audio from Gemini (REAL PCM Int16 to Float32 conversion with queue)
+// Play audio from Gemini
 function playGeminiAudio(base64Audio) {
   // Add to queue
   audioQueue.push(base64Audio);
@@ -1105,7 +1032,7 @@ function playGeminiAudio(base64Audio) {
   }
 }
 
-// Play audio chunks from queue for smooth playback
+// Play audio chunks from queue
 async function playNextAudioChunk() {
   if (audioQueue.length === 0) {
     isPlayingAudio = false;
@@ -1116,7 +1043,7 @@ async function playNextAudioChunk() {
   const base64Audio = audioQueue.shift();
   
   if (!audioContext) {
-    audioContext = new AudioContext({ sampleRate: 24000 }); // Match Gemini output
+    audioContext = new AudioContext({ sampleRate: 24000 });
   }
   
   try {
@@ -1127,43 +1054,30 @@ async function playNextAudioChunk() {
     // Convert PCM Int16 to Float32 for Web Audio
     const float32 = new Float32Array(pcm16.length);
     for (let i = 0; i < pcm16.length; i++) {
-      float32[i] = pcm16[i] / 0x7FFF; // Normalize to [-1, 1]
+      float32[i] = pcm16[i] / 0x7FFF;
     }
     
-    // Create audio buffer
     const audioBuffer = audioContext.createBuffer(1, float32.length, 24000);
     audioBuffer.getChannelData(0).set(float32);
     
-    // Play audio
     const source = audioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioContext.destination);
     
-    // When this chunk finishes, play next
-    source.onended = () => {
-      playNextAudioChunk();
-    };
-    
+    source.onended = () => playNextAudioChunk();
     source.start(0);
-    
-    console.log('🔊 Playing audio chunk:', float32.length, 'samples, queue:', audioQueue.length);
   } catch (error) {
-    console.error('❌ Audio playback error:', error);
-    // Continue to next chunk even if this one fails
     playNextAudioChunk();
   }
 }
 
-// Handle Gemini Messages (REAL Live API)
+// Handle Gemini Messages
 function handleGeminiMessage(message) {
-  console.log('📨 Processing message:', message);
-  
   // Handle text responses
   if (message.serverContent && message.serverContent.modelTurn) {
     const parts = message.serverContent.modelTurn.parts || [];
     parts.forEach(part => {
       if (part.text) {
-        console.log('💬 Gemini says:', part.text);
         showTranscription(part.text);
       }
       
@@ -1182,30 +1096,97 @@ function handleGeminiMessage(message) {
   }
 }
 
-// Handle Tool Calls from Gemini (REAL implementation with response)
+// Handle Tool Calls from Gemini
 async function handleGeminiToolCall(functionCall) {
-  if (!isAgenticMode) {
-    console.log('⚠️  Tool call blocked - AI Control is OFF');
-    return;
-  }
+  if (!isAgenticMode) return;
   
-  console.log('🔧 Gemini Tool Call:', functionCall.name, functionCall.args);
-  showTranscription(`🔧 Executing: ${functionCall.name}`);
+  showTranscription(`Executing: ${functionCall.name}`);
   
   let result;
   
-  // Handle capture_screen locally (no IPC needed)
+  // Handle capture_screen locally - SoM annotated screenshot
   if (functionCall.name === 'capture_screen') {
     result = await captureAndSendScreen();
     
-    // Send response back to Gemini
+    // Build element list text for AI
+    let elementListText = 'Screen captured and sent to you.';
+    if (cachedSoMElements.length > 0) {
+      elementListText += `\n\n📋 NUMBERED ELEMENTS ON SCREEN (${cachedSoMElements.length} found):\n`;
+      for (const el of cachedSoMElements) {
+        const nameStr = el.name ? `"${el.name}"` : '(unnamed)';
+        elementListText += `  #${el.id}: ${nameStr} [${el.type}]\n`;
+      }
+      elementListText += '\n🎯 To click any element, use: click_element(id) with the number!';
+      elementListText += '\nThe screenshot has RED numbered labels on each element.';
+    } else {
+      elementListText += '\nNo clickable elements detected by UI Automation. Use Tab navigation as fallback.';
+    }
+    
+    // Send response back to Gemini with element index
     geminiSession.sendToolResponse({
       functionResponses: [{
         id: functionCall.id,
         name: functionCall.name,
-        response: { success: true, result: 'Screen captured and sent to you' }
+        response: { success: true, result: elementListText }
       }]
     });
+    return;
+  }
+  
+  // Handle click_element locally (uses cached SoM data)
+  if (functionCall.name === 'click_element') {
+    const elementId = functionCall.args?.id;
+    
+    if (!elementId) {
+      geminiSession.sendToolResponse({
+        functionResponses: [{
+          id: functionCall.id,
+          name: functionCall.name,
+          response: { success: false, error: 'Missing element id. Use capture_screen() first to see numbered elements.' }
+        }]
+      });
+      return;
+    }
+    
+    if (cachedSoMElements.length === 0) {
+      geminiSession.sendToolResponse({
+        functionResponses: [{
+          id: functionCall.id,
+          name: functionCall.name,
+          response: { success: false, error: 'No cached elements. Call capture_screen() first!' }
+        }]
+      });
+      return;
+    }
+    
+    // Click via IPC with cached element data
+    result = await ipcRenderer.invoke('execute-action', {
+      type: 'click_element_by_id',
+      elementId: parseInt(elementId),
+      elements: cachedSoMElements,
+      fromAI: true
+    });
+    
+    if (result.success) {
+      geminiSession.sendToolResponse({
+        functionResponses: [{
+          id: functionCall.id,
+          name: functionCall.name,
+          response: { 
+            success: true, 
+            result: `🎯 Clicked element #${elementId}: "${result.clickedElement}" at pixel (${result.clickedAt?.x}, ${result.clickedAt?.y})` 
+          }
+        }]
+      });
+    } else {
+      geminiSession.sendToolResponse({
+        functionResponses: [{
+          id: functionCall.id,
+          name: functionCall.name,
+          response: { success: false, error: result.error || 'Click failed' }
+        }]
+      });
+    }
     return;
   }
   
@@ -1220,7 +1201,6 @@ async function handleGeminiToolCall(functionCall) {
     result = await ipcRenderer.invoke('execute-action', action);
     
     if (result.success) {
-      console.log('✅ Gemini action executed:', action.type);
       
       // Build rich response with context
       let responseData = { success: true };
@@ -1273,9 +1253,6 @@ async function handleGeminiToolCall(functionCall) {
         }]
       });
     } else {
-      console.error('❌ Gemini action failed:', result.error);
-      
-      // Send error response back
       geminiSession.sendToolResponse({
         functionResponses: [{
           id: functionCall.id,
@@ -1285,9 +1262,6 @@ async function handleGeminiToolCall(functionCall) {
       });
     }
   } catch (error) {
-    console.error('❌ Tool call execution error:', error);
-    
-    // Send error response
     geminiSession.sendToolResponse({
       functionResponses: [{
         id: functionCall.id,
@@ -1315,14 +1289,11 @@ function hideTranscription() {
 
 // Agentic Button Handler
 agenticButton.addEventListener('click', async (e) => {
-  console.log('🖱️ Agentic button clicked!');
   e.stopPropagation();
   
   isAgenticMode = !isAgenticMode;
-  console.log('🤖 Agentic mode toggled to:', isAgenticMode);
   
   const result = await ipcRenderer.invoke('toggle-agentic-mode', isAgenticMode);
-  console.log('📡 IPC result:', result);
   
   if (isAgenticMode) {
     agenticButton.classList.add('active');
@@ -1348,7 +1319,7 @@ agenticButton.addEventListener('click', async (e) => {
         // Enable video sharing button
         videoButton.disabled = false;
         
-        showTranscription('🤖 AI Control ENABLED - Voice active! Click "SHARE VIDEO" to enable screen sharing.');
+        showTranscription('AI Control ENABLED - Voice active! Click "SHARE VIDEO" to enable screen sharing.');
       } else {
         throw new Error('Gemini session not initialized');
       }
@@ -1356,7 +1327,7 @@ agenticButton.addEventListener('click', async (e) => {
       console.error('❌ Gemini activation failed:', error);
       agenticStatusEl.textContent = 'ERROR';
       agenticStatusEl.style.color = '#ff4444';
-      showTranscription('❌ Failed to connect to Gemini. Check console for details.');
+      showTranscription('Failed to connect to Gemini.');
       isAgenticMode = false;
       agenticButton.classList.remove('active');
       agenticButton.textContent = '🤖 ENABLE AI CONTROL';
@@ -1375,35 +1346,33 @@ agenticButton.addEventListener('click', async (e) => {
     videoStatusEl.textContent = 'OFF';
     videoStatusEl.style.color = '#ff4444';
     
-    showTranscription('🔒 AI Control DISABLED - Gesture control active');
+    showTranscription('AI Control DISABLED - Gesture control active');
   }
 });
 
 // Video Sharing Button Handler
 videoButton.addEventListener('click', async (e) => {
-  console.log('📹 Video button clicked!');
   e.stopPropagation();
   
   if (!isAgenticMode) {
-    showTranscription('⚠️  Enable AI Control first!');
+    showTranscription('Enable AI Control first!');
     return;
   }
   
   isVideoSharing = !isVideoSharing;
-  console.log('📹 Video sharing toggled to:', isVideoSharing);
   
   if (isVideoSharing) {
     videoButton.classList.add('active');
     videoButton.textContent = '🚫STOP VIDEO';
     videoStatusEl.textContent = 'STREAMING';
     videoStatusEl.style.color = '#00ffff';
-    showTranscription('📹 Video STREAMING enabled (1 FPS continuous) - AI can see your screen! ⚠️ Costs more tokens');
+    showTranscription('Video STREAMING enabled (1 FPS) - AI can see your screen');
   } else {
     videoButton.classList.remove('active');
     videoButton.textContent = '📹 SHARE VIDEO';
     videoStatusEl.textContent = 'ON-DEMAND';
     videoStatusEl.style.color = '#ffaa00';
-    showTranscription('💰 Video streaming OFF - AI can still capture screen on-demand when needed (saves tokens!)');
+    showTranscription('Video streaming OFF - AI captures on-demand when needed');
   }
 });
 
@@ -1416,20 +1385,13 @@ function isClickInsideKeyboard(x, y) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
-// Initialize keyboard elements and event listeners
+// Initialize keyboard
 function initializeKeyboard() {
-  console.log('⌨️ Initializing virtual keyboard...');
-  
   keyboardEl = document.getElementById('keyboard');
   keyboardToggleBtn = document.getElementById('keyboardToggle');
   allKeys = document.querySelectorAll('.key');
   
-  if (!keyboardEl || !keyboardToggleBtn) {
-    console.error('❌ Keyboard elements not found!');
-    return;
-  }
-  
-  console.log(`✅ Found ${allKeys.length} keyboard keys`);
+  if (!keyboardEl || !keyboardToggleBtn) return;
   
   // Keyboard toggle button handler
   keyboardToggleBtn.addEventListener('click', (e) => {
@@ -1445,16 +1407,12 @@ function initializeKeyboard() {
     });
   });
   
-  // Keyboard shortcut: Ctrl+K
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'k') {
       e.preventDefault();
       toggleKeyboard();
-      console.log('⌨️ Ctrl+K pressed - toggling keyboard');
     }
   });
-  
-  console.log('✅ Virtual keyboard initialized!');
 }
 
 // Toggle keyboard visibility
@@ -1462,11 +1420,9 @@ function toggleKeyboard() {
   isKeyboardVisible = !isKeyboardVisible;
   if (isKeyboardVisible) {
     keyboardEl.classList.add('visible');
-    console.log('⌨️ Virtual keyboard opened');
   } else {
     keyboardEl.classList.remove('visible');
     hoveredKey = null;
-    console.log('⌨️ Virtual keyboard closed');
   }
 }
 
@@ -1569,7 +1525,6 @@ async function typeKey(key) {
     });
     
     if (result && result.success) {
-      // Visual feedback
       allKeys.forEach(k => {
         if (k.dataset.key === key) {
           k.style.background = '#00ff00';
@@ -1581,16 +1536,11 @@ async function typeKey(key) {
         }
       });
     } else {
-      console.error(`❌ Failed to type key '${key}':`, result ? result.error : 'No response');
     }
   } catch (error) {
-    console.error(`❌ Type key error:`, error);
   }
 }
 
-// ==================== END KEYBOARD FUNCTIONALITY ====================
+// ==================== END KEYBOARD ====================
 
-// Initialize on load
 window.addEventListener('DOMContentLoaded', initialize);
-
-console.log('👻 OpsGhost Renderer Process Ready');

@@ -6,16 +6,6 @@ const { app, BrowserWindow, desktopCapturer, ipcMain, screen } = require('electr
 const path = require('path');
 const controller = require('./windowsController');
 
-// Log environment loading
-console.log('📁 Loading environment variables...');
-console.log('   .env.local path:', path.join(__dirname, '..', '.env.local'));
-console.log('   .env path:', path.join(__dirname, '..', '.env'));
-if (process.env.GEMINI_API_KEY) {
-  console.log('✅ GEMINI_API_KEY loaded:', process.env.GEMINI_API_KEY.substring(0, 10) + '...');
-} else {
-  console.log('❌ GEMINI_API_KEY not found in environment!');
-}
-
 let mainWindow;
 let isAgenticMode = false;
 
@@ -61,18 +51,14 @@ ipcMain.handle('get-desktop-sources', async () => {
 // Handle agentic mode toggle
 ipcMain.handle('toggle-agentic-mode', async (event, enabled) => {
   isAgenticMode = enabled;
-  console.log('🤖 Agentic Mode:', isAgenticMode ? 'ENABLED' : 'DISABLED');
   return isAgenticMode;
 });
 
 // Handle mouse/keyboard control
 ipcMain.handle('execute-action', async (event, action) => {
-  // Allow all gesture actions now!
-  // Only block AI-initiated actions when agentic mode is off
   const isAIAction = action.fromAI === true;
   
   if (isAIAction && !isAgenticMode) {
-    console.log('❌ Agentic mode not enabled. AI action blocked.');
     return { success: false, error: 'Agentic mode disabled for AI actions' };
   }
   
@@ -136,8 +122,14 @@ ipcMain.handle('execute-action', async (event, action) => {
       case 'click_element_center':
         result = await controller.clickElementCenter();
         break;
+      case 'enumerate_elements':
+        result = await controller.enumerateClickableElements();
+        break;
+      case 'click_element_by_id':
+        // Requires elements array passed from renderer (cached from enumerate)
+        result = await controller.clickElementById(action.elementId, action.elements || []);
+        break;
       default:
-        console.log('Unknown action type:', action.type);
         return { success: false, error: 'Unknown action type' };
     }
     return result;
@@ -150,19 +142,12 @@ ipcMain.handle('execute-action', async (event, action) => {
 // Handle emergency stop
 ipcMain.handle('emergency-stop', async () => {
   isAgenticMode = false;
-  console.log('🛑 EMERGENCY STOP - All AI processes killed');
   return { success: true };
 });
 
 // Send API key to renderer
 ipcMain.handle('get-api-key', () => {
-  const apiKey = process.env.GEMINI_API_KEY || '';
-  if (apiKey) {
-    console.log('✅ API Key loaded:', apiKey.substring(0, 10) + '...');
-  } else {
-    console.log('❌ No API key found in environment');
-  }
-  return apiKey;
+  return process.env.GEMINI_API_KEY || '';
 });
 
 // Handle dynamic mouse event toggling for UI interaction
