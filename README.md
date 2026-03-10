@@ -6,12 +6,7 @@
 
 🖐️ No Mouse Required | 🎤 Voice Commands | 🤖 AI Vision | ⚡ Real Windows Control
 
-[![Frostbyte Hackathon 2026](https://img.shields.io/badge/Frostbyte-Hackathon%202026-blue)](https://frostbyte-hackathon.devpost.com/)
-[![AI & ML](https://img.shields.io/badge/Category-AI%20%26%20ML-green)](https://frostbyte-hackathon.devpost.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-</div>
-
+=
 ---
 
 ## 🌟 What is OpsGhost?
@@ -126,20 +121,3 @@ Built for **Frostbyte Hackathon 2026**. Contributions welcome!
 MIT License
 
 ---
-
-## 🙏 Acknowledgments
-
-- MediaPipe Team
-- Google Gemini
-- Frostbyte Hackathon
-- Open Source Community
-
----
-
-<div align="center">
-
-**Made with 🤖 for Frostbyte Hackathon 2026**
-
-⭐ Star if you like it! | 🐛 Report issues | 🤝 Contribute
-
-</div>
